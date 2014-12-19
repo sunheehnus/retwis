@@ -86,6 +86,21 @@ function strElapsed($t) {
     return "$d day".($d > 1 ? "s" : "");
 }
 
+function showComment($id) {
+    $r = redisLink();
+    $comments = $r->lrange("comments:".$id, 0, -1);
+    foreach($comments as $cid) {
+        $content = $r->hgetall("comment:".$cid);
+        $userid = $content['user_id'];
+        $username = $r->hget("user:$userid","username");
+        $elapsed = strElapsed($content['time']);
+        $userlink = "<a class=\"username\" href=\"profile.php?u=".urlencode($username)."\">".utf8entities($username)."</a>";
+        $comment = utf8entities($content['body']);
+        echo("&nbsp&nbsp&nbsp".$userlink.' '.utf8entities($content['body'])."<br/>");
+        echo('&nbsp&nbsp&nbsp<i>commented '.$elapsed.' ago via web</i><br/>');
+    }
+}
+
 function showPost($id) {
     $r = redisLink();
     $post = $r->hgetall("post:$id");
@@ -95,25 +110,53 @@ function showPost($id) {
     $username = $r->hget("user:$userid","username");
     $elapsed = strElapsed($post['time']);
     $userlink = "<a class=\"username\" href=\"profile.php?u=".urlencode($username)."\">".utf8entities($username)."</a>";
+    $status = utf8entities($post['body']);
+    $ref = $post['ref'];
 
-    echo('<div class="post">'.$userlink.' '.utf8entities($post['body'])."<br>");
-    echo('<i>posted '.$elapsed.' ago via web</i></div>');
+    echo('<div class="post">'.$userlink.' '.$status);
+    while($ref != -1) {
+        $refpost = $r->hgetall("post:$ref");
+        if (empty($refpost)) break;
+        $refuserid = $refpost['user_id'];
+        $refusername = $r->hget("user:$refuserid","username");
+        $refelapsed = strElapsed($refpost['time']);
+        $refuserlink = "<a class=\"username\" href=\"profile.php?u=".urlencode($refusername)."\">".utf8entities($refusername)."</a>";
+        $refstatus = utf8entities($refpost['body']);
+        echo('&nbsp||&nbsp'.$refuserlink.' '.$refstatus);
+        $ref = $refpost['ref'];
+    }
+    echo('<br/>');
+    echo('<i>posted '.$elapsed.' ago via web</i>');
+?>
+<br/>
+<form method="POST">
+<table>
+<tr><td><textarea cols="70" rows="2" name=<?echo "$id";?>></textarea></td></tr>
+<tr><td align="right"><input type="submit" formaction="repost.php" value="repost">
+                      <input type="submit" formaction="comment.php" value="comment"></td></tr>
+</table>
+</form>
+<br/>
+<?
+    showComment($id);
+    echo("</div>");
     return true;
 }
 
-function showUserPosts($userid,$start,$count) {
+function showUserPosts($userid,$start,$count,$means="ALL") {
     $r = redisLink();
-    $key = ($userid == -1) ? "timeline" : "posts:$userid";
-    $posts = $r->lrange($key,$start,$start+$count);
-    $c = 0;
+    if($means != "ALL")
+        $key = "selfPosts:$userid";
+    else
+        $key = ($userid == -1) ? "timeline" : "posts:$userid";
+    $posts = $r->lrange($key,$start,$start+$count-1);
     foreach($posts as $p) {
-        if (showPost($p)) $c++;
-        if ($c == $count) break;
+        showPost($p);
     }
-    return count($posts) == $count+1;
+    return count($posts) == $count;
 }
 
-function showUserPostsWithPagination($username,$userid,$start,$count) {
+function showUserPostsWithPagination($username,$userid,$start,$count,$means="ALL") {
     global $_SERVER;
     $thispage = $_SERVER['PHP_SELF'];
 
@@ -124,7 +167,7 @@ function showUserPostsWithPagination($username,$userid,$start,$count) {
     if ($prev < 0) $prev = 0;
 
     $u = $username ? "&u=".urlencode($username) : "";
-    if (showUserPosts($userid,$start,$count))
+    if (showUserPosts($userid,$start,$count,$means))
         $nextlink = "<a href=\"$thispage?start=$next".$u."\">Older posts &raquo;</a>";
     if ($start > 0) {
         $prevlink = "<a href=\"$thispage?start=$prev".$u."\">&laquo; Newer posts</a>".($nextlink ? " | " : "");
